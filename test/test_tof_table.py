@@ -2,7 +2,8 @@
 
 The test instrument is built entirely within this Python file using the
 mccode-antlr Assembler API together with a minimal, fully deterministic
-neutron source component defined here as an inline string.
+neutron source component defined here as an inline string registered via
+the mccode-antlr InMemoryRegistry (no disk I/O required).
 
 The compiled instrument prints expected time-of-flight values to stdout
 at INITIALIZE time; the tests validate those against Python-computed
@@ -16,7 +17,6 @@ expected arrival time (after PROP_Z0 in the recorder) is t = L / velocity.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from textwrap import dedent
 
 from pytest import mark
@@ -92,21 +92,14 @@ def make_instrument(n_recorders: int = 2):
     -------
     instr : mccode_antlr.instr.Instr
         The assembled instrument object ready for compilation.
-    tmpdir : tempfile.TemporaryDirectory
-        Holder for the temporary directory that contains ``TrivialSource.comp``.
-        Keep this object alive as long as ``instr`` is used.
     """
-    from tempfile import TemporaryDirectory
     from mccode_antlr import Flavor
     from mccode_antlr.assembler import Assembler
-    from mccode_antlr.reader.registry import LocalRegistry
+    from mccode_antlr.reader.registry import InMemoryRegistry
 
-    # Write TrivialSource.comp to a temporary directory so it can be found
-    # by the assembler's registry.  The TemporaryDirectory is returned so
-    # it is not cleaned up before the instrument is compiled.
-    tmpdir = TemporaryDirectory()
-    (Path(tmpdir.name) / 'TrivialSource.comp').write_text(_TRIVIAL_SOURCE_COMP)
-    src_reg = LocalRegistry('trivial_src', tmpdir.name)
+    # Register TrivialSource in memory — no disk I/O needed.
+    src_reg = InMemoryRegistry('trivial_src')
+    src_reg.add_comp('TrivialSource', _TRIVIAL_SOURCE_COMP)
 
     assembler = Assembler(
         'TrivialTofTable',
@@ -150,7 +143,7 @@ def make_instrument(n_recorders: int = 2):
         parameters={'max_events': 10000},
     )
 
-    return assembler.instrument, tmpdir
+    return assembler.instrument
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +160,7 @@ def _compile_and_run(instr, parameters: str) -> bytes:
         If compilation or execution fails a ``RuntimeError`` is raised by
         ``mccode_antlr``, so a normal return means the instrument succeeded.
     """
+    from pathlib import Path
     from tempfile import TemporaryDirectory
     from mccode_antlr import Flavor
     from mccode_antlr.run import mccode_compile, mccode_run_compiled
@@ -193,7 +187,7 @@ def test_tof_table_compiles_and_runs():
     A RuntimeError from mccode-antlr would bubble up as a test failure;
     successfully reaching the assertion means both steps succeeded.
     """
-    instr, _tmp = make_instrument(n_recorders=2)
+    instr = make_instrument(n_recorders=2)
     output = _compile_and_run(instr, '--ncount=10 --seed=1 velocity=1000.0')
     # If we got here without an exception, compilation and run both succeeded.
     assert b'tof_test_start' in output
@@ -210,7 +204,7 @@ def test_tof_table_stdout_reports_expected_times():
     """
     velocity = 500.0
     n_recorders = 3
-    instr, _tmp = make_instrument(n_recorders=n_recorders)
+    instr = make_instrument(n_recorders=n_recorders)
     output = _compile_and_run(
         instr,
         f'--ncount=5 --seed=1 velocity={velocity}',
@@ -231,3 +225,4 @@ def test_tof_table_stdout_reports_expected_times():
         assert expected_str in text, (
             f"Expected '{expected_str}' in output.\nFull output:\n{text}"
         )
+
