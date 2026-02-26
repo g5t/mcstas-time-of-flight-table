@@ -66,6 +66,12 @@ INITIALIZE
 
 TRACE
 %{
+  /* Propagate the neutron to this component's z=0 plane before recording.
+   * This updates t to the actual arrival time at the recorder position,
+   * matching the behaviour of standard McStas TOF monitors.
+   * PROP_Z0 will ABSORB the particle if vz == 0 (particle never arrives). */
+  PROP_Z0;
+
   if (_tof_t_offset >= 0 && _tof_n_offset >= 0) {
     double* _tof_arr = _TOF_T_PTR(_particle);
     int     _n       = _TOF_N_PTR(_particle);
@@ -74,6 +80,7 @@ TRACE
       _tof_arr[recorder_index] = t;
     }
   }
+  SCATTER;
 %}
 
 END
