@@ -50,6 +50,7 @@ DECLARE
   char* manager_name;
   int manager_index;
   char * t_name;
+  char * d_name;
   char * p_name;
   char * n_name;
 %}
@@ -81,9 +82,11 @@ INITIALIZE
   int name_len = strlen("tof_t_") + log10(1+manager_index) + 2;
 
   t_name = calloc(name_len, sizeof(char));
+  d_name = calloc(name_len, sizeof(char));
   p_name = calloc(name_len, sizeof(char));
   n_name = calloc(name_len, sizeof(char));
   sprintf(t_name, "tof_t_%d", manager_index);
+  sprintf(d_name, "tof_d_%d", manager_index);
   sprintf(p_name, "tof_p_%d", manager_index);
   sprintf(n_name, "tof_n_%d", manager_index);
 %}
@@ -98,6 +101,7 @@ TRACE
   // Get pointers to the per-particle USERVARS that TableManager inserted into the neutron ray struct.
   double ** tof_t = (double **) particle_getvar_void(_particle, t_name, 0x0);
   double ** tof_p = (double **) particle_getvar_void(_particle, p_name, 0x0);
+  double ** tof_d = (double **) particle_getvar_void(_particle, d_name, 0x0);
   int * tof_n = (int *) particle_getvar_void(_particle, n_name, 0x0);
 
   /* Always initialise the per-particle pointer to NULL so that TableManager
@@ -105,6 +109,7 @@ TRACE
    * garbage because particle_uservar_init does not zero pointer fields)
    * from one that legitimately went through TableSetup with no recorders. */
   *tof_t = NULL;
+  *tof_d = NULL;
   *tof_p = NULL;
   *tof_n = 0;
 
@@ -120,6 +125,13 @@ TRACE
     if (!*tof_p) {
       fprintf(stderr, "TableSetup ERROR: calloc failed for %d doubles.\n", n_recorders);
       free(*tof_t);
+      exit(1);
+    }
+    *tof_d = (double*)calloc(n_recorders, sizeof(double));
+    if (!*tof_d) {
+      fprintf(stderr, "TableSetup ERROR: calloc failed for %d doubles.\n", n_recorders);
+      free(*tof_t);
+      free(*tof_p);
       exit(1);
     }
     *tof_n = n_recorders;

@@ -59,6 +59,76 @@ SHARE
 static int _tof_recorder_count = 0;
 
 #endif /* _TOF_TABLE_SHARED */
+
+int table_manager_array_line_double(FILE * f, double * x, int n){
+  fprintf(f, "[");
+  for (int i=0; i < n; ++i) {
+    if (fprintf(f, "%.15g", x[i]) < 0) {
+      return -1;
+    }
+    if (i < n - 1) {
+      if (fprintf(f, ", ") < 0) {
+        return -1;
+      }
+    }
+  }
+  if (fprintf(f, "]") < 0) {
+    return -1;
+  }
+  return 0;
+}
+int table_manager_array_line_int(FILE * f, int * x, int n){
+  fprintf(f, "[");
+  for (int i=0; i < n; ++i) {
+    if (fprintf(f, "%d", x[i]) < 0) {
+      return -1;
+    }
+    if (i < n - 1) {
+      if (fprintf(f, ", ") < 0) {
+        return -1;
+      }
+    }
+  }
+  if (fprintf(f, "]") < 0) {
+    return -1;
+  }
+  return 0;
+}
+int table_manager_array_double(FILE * f, double * x, int m, int n){
+  fprintf(f, "[");
+  for (int i=0; i < m; ++i) {
+    if (table_manager_array_line_double(f, &x[i*n], n) < 0) {
+      return -1;
+    }
+    if (i < m - 1) {
+      if (fprintf(f, ", ") < 0) {
+        return -1;
+      }
+    }
+  }
+  if (fprintf(f, "]") < 0) {
+    return -1;
+  }
+  return 0;
+}
+int table_manager_array_int(FILE * f, int * x, int m, int n){
+  fprintf(f, "[");
+  for (int i=0; i < m; ++i) {
+    if (table_manager_array_line_int(f, &x[i*n], n) < 0) {
+      return -1;
+    }
+    if (i < m - 1) {
+      if (fprintf(f, ", ") < 0) {
+        return -1;
+      }
+    }
+  }
+  if (fprintf(f, "]") < 0) {
+    return -1;
+  }
+  return 0;
+}
+
 %}
 
 USERVARS
@@ -71,14 +141,17 @@ USERVARS
    *       the _TOF_T_PTR / _TOF_N_PTR macros to access the same storage. */
   double * tof_t;
   double * tof_p;
+  double * tof_d;
   int tof_n;
 %}
 
 DECLARE
 %{
+  double * table_tp;
   double * table_p;
   double * table_p2;
   int * table_n;
+  double * table_d;
 
   int     _table_n_recorders;
   char * real_filename;
@@ -86,6 +159,7 @@ DECLARE
   int n_bins;
   char * t_name;
   char * p_name;
+  char * d_name;
   char * n_name;
 %}
 
@@ -104,9 +178,11 @@ INITIALIZE
   int name_len = strlen("tof_t_") + log10(1+INDEX_CURRENT_COMP) + 2;
   t_name = calloc(name_len, sizeof(char));
   p_name = calloc(name_len, sizeof(char));
+  d_name = calloc(name_len, sizeof(char));
   n_name = calloc(name_len, sizeof(char));
   sprintf(t_name, "tof_t_%ld", INDEX_CURRENT_COMP);
   sprintf(p_name, "tof_p_%ld", INDEX_CURRENT_COMP);
+  sprintf(d_name, "tof_d_%ld", INDEX_CURRENT_COMP);
   sprintf(n_name, "tof_n_%ld", INDEX_CURRENT_COMP);
 
 
@@ -128,24 +204,22 @@ INITIALIZE
     table_p = NULL;
     table_p2 = NULL;
     table_n = NULL;
+    table_tp = NULL;
+    table_d = NULL;
   } else {
     /* Allocate: n_recorders by n_bins (weights) */
     table_p = (double*)calloc((long)n_bins * _table_n_recorders, sizeof(double));
-    if (!table_p) {
-      fprintf(stderr, "TableManager ERROR: Failed to allocate output table.\n");
-      exit(1);
-    }
     table_p2 = (double*)calloc((long)n_bins * _table_n_recorders, sizeof(double));
-    if (!table_p2) {
-      fprintf(stderr, "TableManager ERROR: Failed to allocate output table.\n");
-      free(table_p);
-      exit(1);
-    }
     table_n = (int*)calloc((long)n_bins * _table_n_recorders, sizeof(int));
-    if (!table_n) {
+    table_d = (double*)calloc((long)_table_n_recorders, sizeof(double));
+    table_tp = (double*)calloc((long)_table_n_recorders, sizeof(double));
+    if (!table_p || !table_p2 || !table_n || !table_d || !table_tp) {
       fprintf(stderr, "TableManager ERROR: Failed to allocate output table.\n");
       free(table_p);
       free(table_p2);
+      free(table_n);
+      free(table_d);
+      free(table_tp);
       exit(1);
     }
   }
@@ -155,19 +229,23 @@ TRACE
 %{
   double ** tof_t = (double **) particle_getvar_void(_particle, t_name, 0x0);
   double ** tof_p = (double **) particle_getvar_void(_particle, p_name, 0x0);
+  double ** tof_d = (double **) particle_getvar_void(_particle, d_name, 0x0);
   int * tof_n = (int *) particle_getvar_void(_particle, n_name, 0x0);
-  if (tof_t && tof_p && tof_n && *tof_n > 0) {
+  if (tof_t && tof_p && tof_d && tof_n && *tof_n > 0) {
     #pragma omp critical
     {
       for (int i=0; i < *tof_n; ++i){
         if ((*tof_t)[i] >= t_min && (*tof_t)[i] < t_max) {
           int bin = (int)(((*tof_t)[i] - t_min) / (t_max - t_min) * n_bins);
           if (bin >= 0 && bin < n_bins) {
-            table_p[bin + i * n_bins] += (*tof_p)[i];
-            table_p2[bin + i * n_bins] += (*tof_p)[i] * (*tof_p)[i];
-            table_n[bin + i * n_bins] += 1;
+            int index = bin + i * n_bins;
+            table_p[index] += (*tof_p)[i];
+            table_p2[index] += (*tof_p)[i] * (*tof_p)[i];
+            table_tp[i] += (*tof_t)[i] * (*tof_p)[i];
+            table_n[index] += 1;
           }
         }
+        table_d[i] = (*tof_d)[i];
       }
     }
     /* Deallocate per-particle array and reset counter.
@@ -175,7 +253,7 @@ TRACE
      * by particle_uservar_init so a non-zero value guarantees TableSetup ran
      * and that tof_t is either NULL (calloc failed → already ABSORBed) or a
      * valid pointer. */
-    if (tof_n > 0) {
+    if (*tof_n > 0) {
       if (tof_t) {
         free(*tof_t);
         *tof_t = NULL;
@@ -184,8 +262,12 @@ TRACE
         free(*tof_p);
         *tof_p = NULL;
       }
-    }
+      if (tof_d) {
+        free(*tof_d);
+        *tof_d = NULL;
+      }
     *tof_n = 0;
+    }
   }
 %}
 
@@ -194,32 +276,24 @@ SAVE
   if (table_p && table_p2 && table_n && write_file) {
     FILE* _f = fopen(real_filename, "w");
     if (_f) {
-      fprintf(_f, "# t_min=%.15g t_max=%.15g t_bins=%d\n", t_min, t_max, n_bins);
-      fprintf(_f, "\n");
-      for (int i=0; i < _table_n_recorders; ++i) {
-        for (int j=0; j < n_bins; ++j) {
-          int idx = j + i * n_bins;
-          fprintf(_f, "%.15g ", table_p[idx]);
-        }
-        fprintf(_f, "\n");
-      }
-      fprintf(_f, "\n");
-      for (int i=0; i < _table_n_recorders; ++i) {
-        for (int j=0; j < n_bins; ++j) {
-          int idx = j + i * n_bins;
-          fprintf(_f, "%.15g ", table_p2[idx]);
-        }
-        fprintf(_f, "\n");
-      }
-      fprintf(_f, "\n");
-      for (int i=0; i < _table_n_recorders; ++i) {
-        for (int j=0; j < n_bins; ++j) {
-          int idx = j + i * n_bins;
-          fprintf(_f, "%d ", table_n[idx]);
-        }
-        fprintf(_f, "\n");
-      }
-      fprintf(_f, "\n");
+      fprintf(_f, "{\"note\": \"Time-of-flight table generated by component '%s'\",\n", NAME_CURRENT_COMP);
+      fprintf(_f, "\"distances\": ");
+      table_manager_array_line_double(_f, table_d, _table_n_recorders);
+      fprintf(_f, ",\n");
+
+      fprintf(_f, "\"t\": {\"min\": %.15g, \"max\": %.15g, \"bins\": %d},\n", t_min, t_max, n_bins);
+      fprintf(_f, "\"tp\": ");
+      table_manager_array_double(_f, table_tp, _table_n_recorders, n_bins);
+      fprintf(_f, ",\n");
+      fprintf(_f, "\"p\": ");
+      table_manager_array_double(_f, table_p, _table_n_recorders, n_bins);
+      fprintf(_f, ",\n");
+      fprintf(_f, "\"p2\": ");
+      table_manager_array_double(_f, table_p2, _table_n_recorders, n_bins);
+      fprintf(_f, ",\n");
+      fprintf(_f, "\"n\": ");
+      table_manager_array_int(_f, table_n, _table_n_recorders, n_bins);
+      fprintf(_f, "}\n");
 
       fclose(_f);
     } else {
@@ -241,6 +315,14 @@ FINALLY
   if (table_n) {
     free(table_n);
     table_n = NULL;
+  }
+  if (table_d) {
+    free(table_d);
+    table_d = NULL;
+  }
+  if (real_filename && real_filename != filename) {
+    free(real_filename);
+    real_filename = NULL;
   }
 %}
 

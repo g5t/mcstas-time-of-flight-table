@@ -25,6 +25,7 @@
 *
 * %P
 * manager: string, Name of the TableManager component in the instrument. Default: 0 (guessed by searching for the first TableManager instance)
+* distance: double, Distance from the reference point. Default: -1 (auto-detect from the component's z position in the instrument file)
 *
 * %E
 *******************************************************************************/
@@ -32,7 +33,8 @@
 DEFINE COMPONENT TableRecorder
 
 SETTING PARAMETERS (
-  string manager=0
+  string manager=0,
+  distance=-1
 )
 
 SHARE
@@ -55,7 +57,9 @@ DECLARE
   int manager_index;
   char * t_name;
   char * p_name;
+  char * d_name;
   char * n_name;
+  double dist;
 %}
 
 INITIALIZE
@@ -84,10 +88,22 @@ INITIALIZE
 
   t_name = calloc(name_len, sizeof(char));
   p_name = calloc(name_len, sizeof(char));
+  d_name = calloc(name_len, sizeof(char));
   n_name = calloc(name_len, sizeof(char));
   sprintf(t_name, "tof_t_%d", manager_index);
   sprintf(p_name, "tof_p_%d", manager_index);
+  sprintf(d_name, "tof_d_%d", manager_index);
   sprintf(n_name, "tof_n_%d", manager_index);
+
+  if (distance >= 0) {
+    dist = distance;
+  } else {
+    dist = 0;
+    for (int i=0; i < INDEX_CURRENT_COMP-1; ++i) {
+      dist += index_getdistance(i, i+1);
+    }
+  }
+
 %}
 
 TRACE
@@ -101,12 +117,14 @@ TRACE
 
   // Get pointers to the per-particle USERVARS that TableManager inserted into the neutron ray struct.
   double ** tof_t = (double **) particle_getvar_void(_particle, t_name, 0x0);
+  double ** tof_d = (double **) particle_getvar_void(_particle, d_name, 0x0);
   double ** tof_p = (double **) particle_getvar_void(_particle, p_name, 0x0);
   int * tof_n = (int *) particle_getvar_void(_particle, n_name, 0x0);
 
-  if (tof_t && tof_p && tof_n && recorder_index < *tof_n) {
+  if (tof_t && tof_d && tof_p && tof_n && recorder_index < *tof_n) {
     (*tof_t)[recorder_index] = t;
     (*tof_p)[recorder_index] = p;
+    (*tof_d)[recorder_index] = dist;
     SCATTER;
   } else {
     /* This can happen if TableManager didn't run earlier in the trace order to allocate the arrays, 
