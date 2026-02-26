@@ -1,0 +1,102 @@
+/*******************************************************************************
+* McStas component: TableSetup
+*
+* %I
+* Written by: Contributors to the mcstas-time-of-flight-table project
+* Date: 2026
+* Origin: ESS
+*
+* Initialises per-particle storage for the time-of-flight lookup table.
+*
+* %D
+* Place this component BEFORE all TableRecorder components in the beamline.
+* At INITIALIZE time it reads the final count of TableRecorder instances
+* (which is available because all component INITIALIZE sections complete
+* before the first TRACE call).  On each TRACE it allocates the per-particle
+* array referenced by the tof_t / tof_n USERVARS that TableManager inserts
+* into the neutron ray struct.
+*
+* Placement:
+*   TableSetup must appear BEFORE the first TableRecorder in the instrument.
+*   TableManager must appear AFTER the last TableRecorder.
+*
+* %P
+* (no input parameters)
+*
+* %E
+*******************************************************************************/
+
+DEFINE COMPONENT TableSetup
+
+SHARE
+%{
+#ifndef _TOF_TABLE_SHARED
+#define _TOF_TABLE_SHARED
+
+extern void* _get_particle_var(char *token, _class_particle *p);
+
+static ptrdiff_t _tof_t_offset = -1;
+static ptrdiff_t _tof_n_offset = -1;
+
+static int _tof_recorder_count = 0;
+
+#define _TOF_T_PTR(particle) (*(double**)((char*)(particle) + _tof_t_offset))
+#define _TOF_N_PTR(particle) (*(int*)  ((char*)(particle) + _tof_n_offset))
+
+#endif /* _TOF_TABLE_SHARED */
+%}
+
+DECLARE
+%{
+  /* Number of TableRecorder components in the instrument.
+   * Set on the first TRACE call (after all INITIALIZE sections have run). */
+  int n_recorders;
+%}
+
+INITIALIZE
+%{
+  /* At this point TableRecorder components may not yet have initialised and
+   * incremented _tof_recorder_count (INITIALIZE order = instrument file order).
+   * The count is therefore read on the first TRACE call once all INITIALIZE
+   * sections have completed. */
+  n_recorders = 0;
+%}
+
+TRACE
+%{
+  if (_tof_t_offset < 0 || _tof_n_offset < 0) {
+    /* TableManager has not initialised the offsets yet – this should not
+     * happen at TRACE time, but guard against it defensively. */
+    fprintf(stderr,
+      "TableSetup ERROR: particle-USERVAR offsets are not set. "
+      "Ensure TableManager appears in the instrument and is placed after "
+      "TableSetup and all TableRecorder components.\n");
+    ABSORB;
+  }
+
+  /* Lazily read the recorder count on the first call. By TRACE time all
+   * INITIALIZE sections have completed, so _tof_recorder_count is final. */
+  if (!n_recorders)
+    n_recorders = _tof_recorder_count;
+
+  /* Always initialise the per-particle pointer to NULL so that TableManager
+   * can safely distinguish an uninitialised particle (tof_t_uservar is
+   * garbage because particle_uservar_init does not zero pointer fields)
+   * from one that legitimately went through TableSetup with no recorders. */
+  _TOF_T_PTR(_particle) = NULL;
+  _TOF_N_PTR(_particle) = 0;
+
+  if (n_recorders > 0) {
+    /* Allocate and zero-initialise the per-particle time array. */
+    double* _arr = (double*)calloc(n_recorders, sizeof(double));
+    if (!_arr) {
+      fprintf(stderr, "TableSetup ERROR: calloc failed for %d doubles.\n",
+              n_recorders);
+      ABSORB;
+    }
+    _TOF_T_PTR(_particle) = _arr;
+    _TOF_N_PTR(_particle) = n_recorders;
+  }
+%}
+
+END

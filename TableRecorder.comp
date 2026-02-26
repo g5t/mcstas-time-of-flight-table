@@ -1,0 +1,79 @@
+/*******************************************************************************
+* McStas component: TableRecorder
+*
+* %I
+* Written by: Contributors to the mcstas-time-of-flight-table project
+* Date: 2026
+* Origin: ESS
+*
+* Records the current neutron time t into the per-particle lookup table array.
+*
+* %D
+* Place one TableRecorder at each beamline position whose time-of-flight you
+* wish to record.  Each instance automatically determines its sequential index
+* (0-based) at INITIALIZE time by counting the number of TableRecorder
+* components that have already been initialised before it.
+*
+* At TRACE time the current neutron time t is written into
+* tof_t[recorder_index] of the per-particle array, provided that the array
+* has been allocated (i.e. TableSetup ran earlier in the trace order) and
+* that recorder_index is within the allocated size.
+*
+* Placement:
+*   TableSetup must appear BEFORE all TableRecorder components.
+*   TableManager must appear AFTER the last TableRecorder.
+*
+* %P
+* (no input parameters)
+*
+* %E
+*******************************************************************************/
+
+DEFINE COMPONENT TableRecorder
+
+SHARE
+%{
+#ifndef _TOF_TABLE_SHARED
+#define _TOF_TABLE_SHARED
+
+extern void* _get_particle_var(char *token, _class_particle *p);
+
+static ptrdiff_t _tof_t_offset = -1;
+static ptrdiff_t _tof_n_offset = -1;
+
+static int _tof_recorder_count = 0;
+
+#define _TOF_T_PTR(particle) (*(double**)((char*)(particle) + _tof_t_offset))
+#define _TOF_N_PTR(particle) (*(int*)  ((char*)(particle) + _tof_n_offset))
+
+#endif /* _TOF_TABLE_SHARED */
+%}
+
+DECLARE
+%{
+  /* 0-based index of this recorder into the per-particle tof_t array.
+   * Set at INITIALIZE time by consuming one slot from the shared counter. */
+  int recorder_index;
+%}
+
+INITIALIZE
+%{
+  /* Each TableRecorder instance takes the next available index.
+   * INITIALIZE sections run in instrument-file order, so earlier instances
+   * get lower indices, which matches the intended beamline order. */
+  recorder_index = _tof_recorder_count++;
+%}
+
+TRACE
+%{
+  if (_tof_t_offset >= 0 && _tof_n_offset >= 0) {
+    double* _tof_arr = _TOF_T_PTR(_particle);
+    int     _n       = _TOF_N_PTR(_particle);
+
+    if (_tof_arr && recorder_index < _n) {
+      _tof_arr[recorder_index] = t;
+    }
+  }
+%}
+
+END
