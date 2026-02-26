@@ -1,0 +1,12 @@
+# mccode-antlr component parse cache files
+*.comp.json
+*.instr.json
+
+# McStas simulation output files that may be created during tests
+tof_table.dat
+
+# Python / pytest artifacts
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
