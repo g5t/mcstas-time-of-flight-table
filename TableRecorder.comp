@@ -24,27 +24,23 @@
 *   TableManager must appear AFTER the last TableRecorder.
 *
 * %P
-* (no input parameters)
+* manager: string, Name of the TableManager component in the instrument. Default: 0 (guessed by searching for the first TableManager instance)
 *
 * %E
 *******************************************************************************/
 
 DEFINE COMPONENT TableRecorder
 
+SETTING PARAMETERS (
+  string manager=0
+)
+
 SHARE
 %{
 #ifndef _TOF_TABLE_SHARED
 #define _TOF_TABLE_SHARED
 
-extern void* _get_particle_var(char *token, _class_particle *p);
-
-static ptrdiff_t _tof_t_offset = -1;
-static ptrdiff_t _tof_n_offset = -1;
-
 static int _tof_recorder_count = 0;
-
-#define _TOF_T_PTR(particle) (*(double**)((char*)(particle) + _tof_t_offset))
-#define _TOF_N_PTR(particle) (*(int*)  ((char*)(particle) + _tof_n_offset))
 
 #endif /* _TOF_TABLE_SHARED */
 %}
@@ -54,6 +50,12 @@ DECLARE
   /* 0-based index of this recorder into the per-particle tof_t array.
    * Set at INITIALIZE time by consuming one slot from the shared counter. */
   int recorder_index;
+
+  char* manager_name;
+  int manager_index;
+  char * t_name;
+  char * p_name;
+  char * n_name;
 %}
 
 INITIALIZE
@@ -62,6 +64,30 @@ INITIALIZE
    * INITIALIZE sections run in instrument-file order, so earlier instances
    * get lower indices, which matches the intended beamline order. */
   recorder_index = _tof_recorder_count++;
+
+    if (manager && manager[0]) {
+    manager_name = manager;
+  } else {
+    manager_name = "manager";
+  }
+  manager_index = _getcomp_index(manager_name);
+  if (manager_index < 0) {
+    fprintf(stderr,
+      "TableSetup ERROR: Specified manager component '%s' not found. "
+      "Ensure the name is correct and that the component appears after all "
+      "TableRecorder components.\n",
+      manager_name);
+    exit(1);
+  }
+
+  int name_len = strlen("tof_t_") + log10(1+manager_index) + 2;
+
+  t_name = calloc(name_len, sizeof(char));
+  p_name = calloc(name_len, sizeof(char));
+  n_name = calloc(name_len, sizeof(char));
+  sprintf(t_name, "tof_t_%d", manager_index);
+  sprintf(p_name, "tof_p_%d", manager_index);
+  sprintf(n_name, "tof_n_%d", manager_index);
 %}
 
 TRACE
@@ -72,15 +98,28 @@ TRACE
    * PROP_Z0 will ABSORB the particle if vz == 0 (particle never arrives). */
   PROP_Z0;
 
-  if (_tof_t_offset >= 0 && _tof_n_offset >= 0) {
-    double* _tof_arr = _TOF_T_PTR(_particle);
-    int     _n       = _TOF_N_PTR(_particle);
 
-    if (_tof_arr && recorder_index < _n) {
-      _tof_arr[recorder_index] = t;
-    }
+  // Get pointers to the per-particle USERVARS that TableManager inserted into the neutron ray struct.
+  double ** tof_t = (double **) particle_getvar_void(_particle, t_name, 0x0);
+  double ** tof_p = (double **) particle_getvar_void(_particle, p_name, 0x0);
+  int * tof_n = (int *) particle_getvar_void(_particle, n_name, 0x0);
+
+  if (tof_t && tof_p && tof_n && recorder_index < *tof_n) {
+    (*tof_t)[recorder_index] = t;
+    (*tof_p)[recorder_index] = p;
+    SCATTER;
+  } else {
+    /* This can happen if TableManager didn't run earlier in the trace order to allocate the arrays, 
+       or if recorder_index exceeds the allocated size (i.e. more TableRecorders than expected). 
+    */
+    fprintf(stderr,
+      "TableRecorder WARNING: Failed to record TOF for recorder index %d. "
+      "Ensure that TableManager appears after all TableRecorder components and that the manager component name is correct.\n",
+      recorder_index
+      );
+    ABSORB;
   }
-  SCATTER;
+
 %}
 
 END

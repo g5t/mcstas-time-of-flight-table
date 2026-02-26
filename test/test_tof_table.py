@@ -140,7 +140,7 @@ def make_instrument(n_recorders: int = 2):
     assembler.component(
         'manager', 'TableManager',
         at=([0, 0, float(n_recorders + 1)], src),
-        parameters={'max_events': 10000},
+        parameters={'t_min': 0., 't_max': 1/100.0, 't_bins': 10},
     )
 
     return assembler.instrument

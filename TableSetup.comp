@@ -21,27 +21,23 @@
 *   TableManager must appear AFTER the last TableRecorder.
 *
 * %P
-* (no input parameters)
+* manager: string, Name of the TableManager component in the instrument. Default: 0 (guessed by searching for the first TableManager instance)
 *
 * %E
 *******************************************************************************/
 
 DEFINE COMPONENT TableSetup
 
+SETTING PARAMETERS (
+  string manager=0
+)
+
 SHARE
 %{
 #ifndef _TOF_TABLE_SHARED
 #define _TOF_TABLE_SHARED
 
-extern void* _get_particle_var(char *token, _class_particle *p);
-
-static ptrdiff_t _tof_t_offset = -1;
-static ptrdiff_t _tof_n_offset = -1;
-
 static int _tof_recorder_count = 0;
-
-#define _TOF_T_PTR(particle) (*(double**)((char*)(particle) + _tof_t_offset))
-#define _TOF_N_PTR(particle) (*(int*)  ((char*)(particle) + _tof_n_offset))
 
 #endif /* _TOF_TABLE_SHARED */
 %}
@@ -51,6 +47,11 @@ DECLARE
   /* Number of TableRecorder components in the instrument.
    * Set on the first TRACE call (after all INITIALIZE sections have run). */
   int n_recorders;
+  char* manager_name;
+  int manager_index;
+  char * t_name;
+  char * p_name;
+  char * n_name;
 %}
 
 INITIALIZE
@@ -59,43 +60,69 @@ INITIALIZE
    * incremented _tof_recorder_count (INITIALIZE order = instrument file order).
    * The count is therefore read on the first TRACE call once all INITIALIZE
    * sections have completed. */
+
   n_recorders = 0;
+  
+  if (manager && manager[0]) {
+    manager_name = manager;
+  } else {
+    manager_name = "manager";
+  }
+  manager_index = _getcomp_index(manager_name);
+  if (manager_index < 0) {
+    fprintf(stderr,
+      "TableSetup ERROR: Specified manager component '%s' not found. "
+      "Ensure the name is correct and that the component appears after all "
+      "TableRecorder components.\n",
+      manager_name);
+    exit(1);
+  }
+
+  int name_len = strlen("tof_t_") + log10(1+manager_index) + 2;
+
+  t_name = calloc(name_len, sizeof(char));
+  p_name = calloc(name_len, sizeof(char));
+  n_name = calloc(name_len, sizeof(char));
+  sprintf(t_name, "tof_t_%d", manager_index);
+  sprintf(p_name, "tof_p_%d", manager_index);
+  sprintf(n_name, "tof_n_%d", manager_index);
 %}
 
 TRACE
 %{
-  if (_tof_t_offset < 0 || _tof_n_offset < 0) {
-    /* TableManager has not initialised the offsets yet – this should not
-     * happen at TRACE time, but guard against it defensively. */
-    fprintf(stderr,
-      "TableSetup ERROR: particle-USERVAR offsets are not set. "
-      "Ensure TableManager appears in the instrument and is placed after "
-      "TableSetup and all TableRecorder components.\n");
-    ABSORB;
-  }
-
   /* Lazily read the recorder count on the first call. By TRACE time all
    * INITIALIZE sections have completed, so _tof_recorder_count is final. */
   if (!n_recorders)
     n_recorders = _tof_recorder_count;
 
+  // Get pointers to the per-particle USERVARS that TableManager inserted into the neutron ray struct.
+  double ** tof_t = (double **) particle_getvar_void(_particle, t_name, 0x0);
+  double ** tof_p = (double **) particle_getvar_void(_particle, p_name, 0x0);
+  int * tof_n = (int *) particle_getvar_void(_particle, n_name, 0x0);
+
   /* Always initialise the per-particle pointer to NULL so that TableManager
    * can safely distinguish an uninitialised particle (tof_t_uservar is
    * garbage because particle_uservar_init does not zero pointer fields)
    * from one that legitimately went through TableSetup with no recorders. */
-  _TOF_T_PTR(_particle) = NULL;
-  _TOF_N_PTR(_particle) = 0;
+  *tof_t = NULL;
+  *tof_p = NULL;
+  *tof_n = 0;
 
+  // Only in the case where recorders are present do we need to allocate the per-particle arrays.
   if (n_recorders > 0) {
     /* Allocate and zero-initialise the per-particle time array. */
-    double* _arr = (double*)calloc(n_recorders, sizeof(double));
-    if (!_arr) {
-      fprintf(stderr, "TableSetup ERROR: calloc failed for %d doubles.\n",
-              n_recorders);
-      ABSORB;
+    *tof_t = (double*)calloc(n_recorders, sizeof(double));
+    if (!*tof_t) {
+      fprintf(stderr, "TableSetup ERROR: calloc failed for %d doubles.\n", n_recorders);
+      exit(1);
     }
-    _TOF_T_PTR(_particle) = _arr;
-    _TOF_N_PTR(_particle) = n_recorders;
+    *tof_p = (double*)calloc(n_recorders, sizeof(double));
+    if (!*tof_p) {
+      fprintf(stderr, "TableSetup ERROR: calloc failed for %d doubles.\n", n_recorders);
+      free(*tof_t);
+      exit(1);
+    }
+    *tof_n = n_recorders;
   }
 %}
 
