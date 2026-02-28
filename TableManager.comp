@@ -96,11 +96,11 @@ INITIALIZE
     sprintf(real_filename, "%s_tof_table.dat", NAME_CURRENT_COMP);
   }
 
-  if (!_tof_table_manager_state){
+  if (!table_manager_state_exists()){
     fprintf(stderr, "TableManager ERROR: state must be pre-allocated by TableSetup.\n");
     exit(1);
   }
-  table = table_manager_data_alloc(_tof_table_manager_state->n_recorders, t_bins ? t_bins : 1, t_min, t_max);
+  table = table_manager_data_alloc(table_manager_state_n_recorders(), t_bins ? t_bins : 1, t_min, t_max);
   if (!table) {
     fprintf(stderr, "TableManager ERROR: Failed to allocate component data.\n");
     exit(1);

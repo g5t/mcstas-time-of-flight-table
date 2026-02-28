@@ -37,6 +37,18 @@ void test_data_free_null_does_not_crash(void) {
     table_manager_data_free(NULL); /* must be safe */
 }
 
+void test_data_alloc_arrays_are_zero_initialised(void) {
+    struct TableManagerData * data = table_manager_data_alloc(2, 5, 0.0, 1.0);
+    TEST_ASSERT_NOT_NULL(data);
+    for (int i = 0; i < 2 * 5; i++) {
+        TEST_ASSERT_DOUBLE_WITHIN(1e-30, 0.0, data->tp[i]);
+        TEST_ASSERT_DOUBLE_WITHIN(1e-30, 0.0, data->p1[i]);
+        TEST_ASSERT_DOUBLE_WITHIN(1e-30, 0.0, data->p2[i]);
+        TEST_ASSERT_EQUAL_INT(0, data->n[i]);
+    }
+    table_manager_data_free(data);
+}
+
 void test_data_alloc_single_recorder_single_bin(void) {
     struct TableManagerData * data = table_manager_data_alloc(1, 1, 0.0, 1.0);
     TEST_ASSERT_NOT_NULL(data);
@@ -51,6 +63,7 @@ int main(void) {
     RUN_TEST(test_data_alloc_sets_correct_fields);
     RUN_TEST(test_data_alloc_arrays_are_non_null);
     RUN_TEST(test_data_free_null_does_not_crash);
+    RUN_TEST(test_data_alloc_arrays_are_zero_initialised);
     RUN_TEST(test_data_alloc_single_recorder_single_bin);
     return UNITY_END();
 }

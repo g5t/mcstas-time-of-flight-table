@@ -5,6 +5,7 @@
  * functions that the McStas runtime normally supplies. */
 #ifndef MCSTAS
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +46,7 @@ void table_manager_data_free(struct TableManagerData * data);
 void table_manager_state_alloc(void);
 void table_manager_state_free(void);
 int  table_manager_state_exists(void);
+int  table_manager_state_n_recorders(void);
 int  table_manager_state_add_recorder(const char * name, double distance);
 void table_manager_state_finalize(int manager_index,
                                   const char * t_name,

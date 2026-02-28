@@ -21,12 +21,16 @@ struct TableManagerLinkedList {
     struct TableManagerLinkedListNode * tail;
 };
 
+/* Offsets into _struct_particle for the per-particle arrays.
+ * Computed once at state_finalize time; the hot-path accessors use these
+ * directly instead of calling particle_getvar_void on every particle. */
 struct TableManagerState {
     int n_recorders;
+    int offsets_set;             /* 1 after state_finalize succeeds          */
     struct TableManagerLinkedList recorders;
-    char * t_name;
-    char * p_name;
-    char * n_name;
+    ptrdiff_t t_offset;          /* byte offset of table_manager_t_N field   */
+    ptrdiff_t p_offset;          /* byte offset of table_manager_p_N field   */
+    ptrdiff_t n_offset;          /* byte offset of table_manager_n_N field   */
 };
 
 static struct TableManagerState * _tof_table_manager_state = NULL;
@@ -43,10 +47,11 @@ static struct TableManagerState * _table_manager_state_alloc(void) {
         return NULL;
     }
     state->n_recorders = 0;
+    state->offsets_set = 0;
     state->recorders = (struct TableManagerLinkedList) {0};
-    state->t_name = NULL;
-    state->p_name = NULL;
-    state->n_name = NULL;
+    state->t_offset = 0;
+    state->p_offset = 0;
+    state->n_offset = 0;
     return state;
 }
 
@@ -59,24 +64,20 @@ static void _table_manager_state_free(struct TableManagerState * state) {
             free(node);
             node = next;
         }
-        free(state->t_name);
-        free(state->p_name);
-        free(state->n_name);
         free(state);
     }
 }
 
-static void _set_name_with_suffix_index(char ** name_field,
-                                        const char * base_name, int index) {
+/* Builds "base_name_index" into a freshly allocated string (caller frees). */
+static char * _build_suffixed_name(const char * base_name, int index) {
     int len = snprintf(NULL, 0, "%s_%d", base_name, index);
-    char * new_name = (char *) malloc((size_t)(len + 1));
-    if (!new_name) {
-        fprintf(stderr, "TableManager ERROR: Failed to allocate memory for name with suffix.\n");
-        return;
+    char * name = (char *) malloc((size_t)(len + 1));
+    if (!name) {
+        fprintf(stderr, "TableManager ERROR: Failed to allocate memory for suffixed name.\n");
+        return NULL;
     }
-    sprintf(new_name, "%s_%d", base_name, index);
-    free(*name_field);
-    *name_field = new_name;
+    sprintf(name, "%s_%d", base_name, index);
+    return name;
 }
 
 /* ---------------------------------------------------------------------------
@@ -95,10 +96,10 @@ struct TableManagerData * table_manager_data_alloc(int recorders, int bins,
     data->bins = bins;
     data->t_min = t_min;
     data->t_max = t_max;
-    data->tp = (double *) malloc(sizeof(double) * recorders * bins);
-    data->p1 = (double *) malloc(sizeof(double) * recorders * bins);
-    data->p2 = (double *) malloc(sizeof(double) * recorders * bins);
-    data->n  = (int *)    malloc(sizeof(int)    * recorders * bins);
+    data->tp = (double *) calloc((size_t)(recorders * bins), sizeof(double));
+    data->p1 = (double *) calloc((size_t)(recorders * bins), sizeof(double));
+    data->p2 = (double *) calloc((size_t)(recorders * bins), sizeof(double));
+    data->n  = (int *)    calloc((size_t)(recorders * bins), sizeof(int));
     if (!data->tp || !data->p1 || !data->p2 || !data->n) {
         fprintf(stderr, "TableManager ERROR: Failed to allocate memory for TableManagerData arrays.\n");
         table_manager_data_free(data);
@@ -141,6 +142,10 @@ int table_manager_state_exists(void) {
     return _tof_table_manager_state != NULL;
 }
 
+int table_manager_state_n_recorders(void) {
+    return _tof_table_manager_state ? _tof_table_manager_state->n_recorders : 0;
+}
+
 int table_manager_state_add_recorder(const char * name, double distance) {
     if (!_tof_table_manager_state) {
         fprintf(stderr, "TableManager ERROR: state must be allocated by TableSetup before adding recorders.\n");
@@ -179,9 +184,32 @@ void table_manager_state_finalize(int manager_index,
         fprintf(stderr, "TableManager ERROR: state must be allocated by TableSetup before finalizing.\n");
         return;
     }
-    _set_name_with_suffix_index(&_tof_table_manager_state->t_name, t_name, manager_index);
-    _set_name_with_suffix_index(&_tof_table_manager_state->p_name, p_name, manager_index);
-    _set_name_with_suffix_index(&_tof_table_manager_state->n_name, n_name, manager_index);
+    /* Build suffixed names (e.g. "table_manager_t_9"), resolve their byte
+     * offsets in _struct_particle via a one-shot particle_getvar_void call,
+     * then discard the strings.  Hot-path accessors use the offsets directly
+     * and never call particle_getvar_void at TRACE time. */
+    char * tname = _build_suffixed_name(t_name, manager_index);
+    char * pname = _build_suffixed_name(p_name, manager_index);
+    char * nname = _build_suffixed_name(n_name, manager_index);
+    if (!tname || !pname || !nname) {
+        free(tname); free(pname); free(nname);
+        return;
+    }
+    _class_particle dummy = {0};
+    int s_t = 1, s_p = 1, s_n = 1;
+    void * t_ptr = particle_getvar_void(&dummy, tname, &s_t);
+    void * p_ptr = particle_getvar_void(&dummy, pname, &s_p);
+    void * n_ptr = particle_getvar_void(&dummy, nname, &s_n);
+    free(tname); free(pname); free(nname);
+    if (s_t != 0 || s_p != 0 || s_n != 0 || !t_ptr || !p_ptr || !n_ptr) {
+        fprintf(stderr, "TableManager ERROR: Failed to resolve particle field offsets for manager index %d.\n",
+                manager_index);
+        return;
+    }
+    _tof_table_manager_state->t_offset = (ptrdiff_t)((char *)t_ptr - (char *)&dummy);
+    _tof_table_manager_state->p_offset = (ptrdiff_t)((char *)p_ptr - (char *)&dummy);
+    _tof_table_manager_state->n_offset = (ptrdiff_t)((char *)n_ptr - (char *)&dummy);
+    _tof_table_manager_state->offsets_set = 1;
 }
 
 /* ---------------------------------------------------------------------------
@@ -189,39 +217,27 @@ void table_manager_state_finalize(int manager_index,
  * ------------------------------------------------------------------------- */
 
 double ** table_manager_particle_t_array_ptr(_class_particle * p) {
-    if (!_tof_table_manager_state) {
-        fprintf(stderr, "TableManager ERROR: state must be allocated by TableSetup before accessing the t array.\n");
+    if (!_tof_table_manager_state || !_tof_table_manager_state->offsets_set) {
+        fprintf(stderr, "TableManager ERROR: state must be allocated and finalized before accessing the t array.\n");
         return NULL;
     }
-    if (!_tof_table_manager_state->t_name) {
-        fprintf(stderr, "TableManager ERROR: t_name must be set in the state before accessing the t array.\n");
-        return NULL;
-    }
-    return (double **) particle_getvar_void(p, _tof_table_manager_state->t_name, NULL);
+    return (double **)((char *)p + _tof_table_manager_state->t_offset);
 }
 
 double ** table_manager_particle_p_array_ptr(_class_particle * p) {
-    if (!_tof_table_manager_state) {
-        fprintf(stderr, "TableManager ERROR: state must be allocated by TableSetup before accessing the p array.\n");
+    if (!_tof_table_manager_state || !_tof_table_manager_state->offsets_set) {
+        fprintf(stderr, "TableManager ERROR: state must be allocated and finalized before accessing the p array.\n");
         return NULL;
     }
-    if (!_tof_table_manager_state->p_name) {
-        fprintf(stderr, "TableManager ERROR: p_name must be set in the state before accessing the p array.\n");
-        return NULL;
-    }
-    return (double **) particle_getvar_void(p, _tof_table_manager_state->p_name, NULL);
+    return (double **)((char *)p + _tof_table_manager_state->p_offset);
 }
 
 int * table_manager_particle_n_ptr(_class_particle * p) {
-    if (!_tof_table_manager_state) {
-        fprintf(stderr, "TableManager ERROR: state must be allocated by TableSetup before accessing the n array.\n");
+    if (!_tof_table_manager_state || !_tof_table_manager_state->offsets_set) {
+        fprintf(stderr, "TableManager ERROR: state must be allocated and finalized before accessing the n array.\n");
         return NULL;
     }
-    if (!_tof_table_manager_state->n_name) {
-        fprintf(stderr, "TableManager ERROR: n_name must be set in the state before accessing the n array.\n");
-        return NULL;
-    }
-    return (int *) particle_getvar_void(p, _tof_table_manager_state->n_name, NULL);
+    return (int *)((char *)p + _tof_table_manager_state->n_offset);
 }
 
 /* ---------------------------------------------------------------------------

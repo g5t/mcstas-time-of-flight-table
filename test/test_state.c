@@ -56,6 +56,22 @@ void test_add_recorders_return_sequential_indices(void) {
     TEST_ASSERT_EQUAL_INT(2, table_manager_state_add_recorder("rec2", 3.0));
 }
 
+void test_state_n_recorders_zero_without_recorders(void) {
+    table_manager_state_alloc();
+    TEST_ASSERT_EQUAL_INT(0, table_manager_state_n_recorders());
+}
+
+void test_state_n_recorders_counts_recorders(void) {
+    table_manager_state_alloc();
+    table_manager_state_add_recorder("rec0", 1.0);
+    table_manager_state_add_recorder("rec1", 2.0);
+    TEST_ASSERT_EQUAL_INT(2, table_manager_state_n_recorders());
+}
+
+void test_state_n_recorders_zero_without_state(void) {
+    TEST_ASSERT_EQUAL_INT(0, table_manager_state_n_recorders());
+}
+
 /* ---- state_finalize – indirect test via particle accessor ---- */
 
 void test_state_finalize_enables_particle_accessor(void) {
@@ -82,6 +98,9 @@ int main(void) {
     RUN_TEST(test_add_recorder_without_state_returns_error);
     RUN_TEST(test_add_first_recorder_returns_zero);
     RUN_TEST(test_add_recorders_return_sequential_indices);
+    RUN_TEST(test_state_n_recorders_zero_without_recorders);
+    RUN_TEST(test_state_n_recorders_counts_recorders);
+    RUN_TEST(test_state_n_recorders_zero_without_state);
     RUN_TEST(test_state_finalize_enables_particle_accessor);
     return UNITY_END();
 }
