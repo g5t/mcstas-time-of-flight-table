@@ -24,7 +24,6 @@
 *   TableManager must appear AFTER the last TableRecorder.
 *
 * %P
-* manager: string, Name of the TableManager component in the instrument. Default: 0 (assumed to be "manager")
 * distance: double, Distance from the reference point. Default: UNSET (auto-detect from the component's path-length in the instrument file)
 *
 * %E
@@ -33,7 +32,6 @@
 DEFINE COMPONENT TableRecorder
 
 SETTING PARAMETERS (
-  string manager=0,
   distance=UNSET
 )
 
