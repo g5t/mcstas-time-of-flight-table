@@ -7,6 +7,9 @@
 struct _struct_particle {
     double t;
     double p;
+    double * table_manager_t_9;
+    double * table_manager_p_9;
+    int table_manager_n_9;
 };
 typedef struct _struct_particle _class_particle;
 #endif /* MCSTAS */
