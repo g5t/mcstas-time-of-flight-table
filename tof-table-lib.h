@@ -2,8 +2,10 @@
 #define TOF_TABLE_LIB_H
 
 #ifndef MCSTAS
-#include <stdlib.h>
+#include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 struct _struct_particle {
     double t;
     double p;
@@ -12,6 +14,10 @@ struct _struct_particle {
     int table_manager_n_9;
 };
 typedef struct _struct_particle _class_particle;
+
+/* Required by tof-table-lib.c; in McStas this is provided by the runtime.
+ * Outside of McStas, provide an implementation (e.g. test/particle_stub.c). */
+void* particle_getvar_void(_class_particle *p, char *name, int *success);
 #endif /* MCSTAS */
 
 struct TableManagerLinkedListNode {
@@ -78,4 +84,8 @@ int table_manager_particle_record(_class_particle * p, int recorder_index);
 int table_manager_particle_to_table(_class_particle * p, struct TableManagerData * data);
 
 int table_manager_particle_free(_class_particle * p);
+
+void table_manager_state_finalize(int manager_index, const char * t_name, const char * p_name, const char * n_name);
+
+int table_manager_write_output_file(const char * filename, struct TableManagerData * data);
 #endif
