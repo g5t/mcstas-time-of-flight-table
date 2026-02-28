@@ -430,40 +430,23 @@ int table_manager_json_matrix_int(FILE * f, int * x, int m, int n,
     return 0;
 }
 
-static int _table_manager_json_recorder_info(FILE * f, int indent_level) {
-    if (!_tof_table_manager_state) {
-        fprintf(stderr, "TableManager ERROR: state must be allocated by TableSetup before writing recorder info to output file.\n");
-        return -1;
+/* Writes: indent "key": {"unit": <unit>, "dtype": "dtype", "dims": dims, "values":
+ * where <unit> is a JSON null when unit==NULL, or a quoted string otherwise.
+ * The caller writes the values array and closing "}". */
+static int _json_scipp_var_header(FILE * f, int indent,
+                                  const char * key, const char * unit,
+                                  const char * dtype, const char * dims) {
+    int ok = table_manager_json_indent(f, indent) == 0;
+    if (unit) {
+        ok = ok && fprintf(f, "\"%s\": {\"unit\": \"%s\", \"dtype\": \"%s\","
+                              " \"dims\": %s, \"values\": ",
+                           key, unit, dtype, dims) > 0;
+    } else {
+        ok = ok && fprintf(f, "\"%s\": {\"unit\": null, \"dtype\": \"%s\","
+                              " \"dims\": %s, \"values\": ",
+                           key, dtype, dims) > 0;
     }
-    if (table_manager_json_indent(f, indent_level) < 0 ||
-        fprintf(f, "\"recorders\": [\n") < 0)
-        return -1;
-    struct TableManagerLinkedListNode * node = _tof_table_manager_state->recorders.head;
-    for (int i = 0; i < _tof_table_manager_state->n_recorders; ++i) {
-        if (!node) {
-            fprintf(stderr, "TableManager ERROR: Recorder linked list is shorter than n_recorders.\n");
-            return -1;
-        }
-        if (table_manager_json_indent(f, indent_level + 1) < 0 ||
-            fprintf(f, "{ \"name\": \"%s\", \"distance\": %.15g }",
-                    node->name, node->distance) < 0)
-            return -1;
-        if (fprintf(f, i < _tof_table_manager_state->n_recorders - 1 ? ",\n" : "\n") < 0)
-            return -1;
-        node = node->next;
-    }
-    if (table_manager_json_indent(f, indent_level) < 0 || fprintf(f, "]") < 0)
-        return -1;
-    return 0;
-}
-
-static int _table_manager_json_time_info(FILE * f, int indent_level,
-                                         struct TableManagerData * data) {
-    if (table_manager_json_indent(f, indent_level) < 0 ||
-        fprintf(f, "\"time\": { \"min\": %.15g, \"max\": %.15g, \"bins\": %d }",
-                data->t_min, data->t_max, data->bins) < 0)
-        return -1;
-    return 0;
+    return ok ? 0 : -1;
 }
 
 /* ---------------------------------------------------------------------------
@@ -472,40 +455,81 @@ static int _table_manager_json_time_info(FILE * f, int indent_level,
 
 int table_manager_write_output_file(const char * filename,
                                     struct TableManagerData * data) {
+    if (!_tof_table_manager_state) {
+        fprintf(stderr, "TableManager ERROR: state must be allocated before writing output file.\n");
+        return -1;
+    }
+
+    int nr = _tof_table_manager_state->n_recorders;
+
+    /* Collect recorder info and compute time bin edges. */
+    char   ** names     = (char **)   malloc((size_t)nr * sizeof(char *));
+    double  * distances = (double *)  malloc((size_t)nr * sizeof(double));
+    double  * t_edges   = (double *)  malloc((size_t)(data->bins + 1) * sizeof(double));
+    if (!names || !distances || !t_edges) {
+        fprintf(stderr, "TableManager ERROR: Failed to allocate memory for output file.\n");
+        free(names); free(distances); free(t_edges);
+        return -1;
+    }
+    struct TableManagerLinkedListNode * node = _tof_table_manager_state->recorders.head;
+    for (int i = 0; i < nr; ++i, node = node->next) {
+        names[i]     = node->name;
+        distances[i] = node->distance;
+    }
+    double step = (data->t_max - data->t_min) / data->bins;
+    for (int i = 0; i <= data->bins; ++i)
+        t_edges[i] = data->t_min + i * step;
+
     FILE * f = fopen(filename, "w");
     if (!f) {
         fprintf(stderr, "TableManager ERROR: Failed to open file '%s' for writing.\n", filename);
+        free(names); free(distances); free(t_edges);
         return -1;
     }
+
+    /* Output format: scipp.Dataset JSON.
+     * Each variable follows the niess.io.scipp.variable_to_dict convention:
+     *   {"unit": <str|null>, "dtype": "...", "dims": [...], "values": [...]}
+     * The recorder coord has unit null (scipp "no unit") since names are strings.
+     * The time coord holds bin edges (bins+1 values). */
     int ok =
         fprintf(f, "{\n") > 0 &&
         table_manager_json_indent(f, 1) == 0 &&
-        fprintf(f, "\"dims\": {\"time\": %d, \"recorders\": %d},\n",
-                data->bins, data->recorders) > 0 &&
+        fprintf(f, "\"type\": \"scipp.Dataset\",\n") > 0 &&
+        /* coords */
         table_manager_json_indent(f, 1) == 0 &&
-        fprintf(f, "\"coords\": [\n") > 0 &&
-        _table_manager_json_recorder_info(f, 2) == 0 &&
-        fprintf(f, ",\n") > 0 &&
-        _table_manager_json_time_info(f, 2, data) == 0 &&
-        fprintf(f, "\n") > 0 &&
+        fprintf(f, "\"coords\": {\n") > 0 &&
+        _json_scipp_var_header(f, 2, "time", "s", "float64", "[\"time\"]") == 0 &&
+        table_manager_json_array_double(f, t_edges, data->bins + 1) == 0 &&
+        fprintf(f, "},\n") > 0 &&
+        _json_scipp_var_header(f, 2, "distance", "m", "float64", "[\"recorder\"]") == 0 &&
+        table_manager_json_array_double(f, distances, nr) == 0 &&
+        fprintf(f, "},\n") > 0 &&
+        _json_scipp_var_header(f, 2, "recorder", NULL, "string", "[\"recorder\"]") == 0 &&
+        table_manager_json_array_string(f, names, nr) == 0 &&
+        fprintf(f, "}\n") > 0 &&
         table_manager_json_indent(f, 1) == 0 &&
-        fprintf(f, "],\n") > 0 &&
+        fprintf(f, "},\n") > 0 &&
+        /* data */
         table_manager_json_indent(f, 1) == 0 &&
-        fprintf(f, "\"tp\": ") > 0 &&
+        fprintf(f, "\"data\": {\n") > 0 &&
+        _json_scipp_var_header(f, 2, "tp", "s", "float64", "[\"recorder\", \"time\"]") == 0 &&
         table_manager_json_matrix_double(f, data->tp, data->recorders, data->bins, 2) == 0 &&
-        fprintf(f, ",\n") > 0 &&
-        table_manager_json_indent(f, 1) == 0 &&
-        fprintf(f, "\"p1\": ") > 0 &&
+        fprintf(f, "},\n") > 0 &&
+        _json_scipp_var_header(f, 2, "p1", "dimensionless", "float64", "[\"recorder\", \"time\"]") == 0 &&
         table_manager_json_matrix_double(f, data->p1, data->recorders, data->bins, 2) == 0 &&
-        fprintf(f, ",\n") > 0 &&
-        table_manager_json_indent(f, 1) == 0 &&
-        fprintf(f, "\"p2\": ") > 0 &&
+        fprintf(f, "},\n") > 0 &&
+        _json_scipp_var_header(f, 2, "p2", "dimensionless", "float64", "[\"recorder\", \"time\"]") == 0 &&
         table_manager_json_matrix_double(f, data->p2, data->recorders, data->bins, 2) == 0 &&
-        fprintf(f, ",\n") > 0 &&
-        table_manager_json_indent(f, 1) == 0 &&
-        fprintf(f, "\"n\": ") > 0 &&
+        fprintf(f, "},\n") > 0 &&
+        _json_scipp_var_header(f, 2, "n", "dimensionless", "int32", "[\"recorder\", \"time\"]") == 0 &&
         table_manager_json_matrix_int(f, data->n, data->recorders, data->bins, 2) == 0 &&
-        fprintf(f, "\n}\n") > 0;
+        fprintf(f, "}\n") > 0 &&
+        table_manager_json_indent(f, 1) == 0 &&
+        fprintf(f, "}\n") > 0 &&
+        fprintf(f, "}\n") > 0;
+
+    free(names); free(distances); free(t_edges);
     if (!ok) {
         fprintf(stderr, "TableManager ERROR: Failed to write to file '%s'.\n", filename);
         fclose(f);

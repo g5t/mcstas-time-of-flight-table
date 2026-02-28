@@ -157,18 +157,29 @@ void test_write_output_file_creates_file(void) {
 
     FILE * f = fopen(fname, "r");
     TEST_ASSERT_NOT_NULL(f);
-    char buf[4096];
+    char buf[8192];
     size_t n = fread(buf, 1, sizeof(buf) - 1, f);
     buf[n] = '\0';
     fclose(f);
     remove(fname);
 
-    TEST_ASSERT_NOT_NULL(strstr(buf, "\"dims\""));
-    TEST_ASSERT_NOT_NULL(strstr(buf, "\"recorders\""));
+    /* Top-level structure */
+    TEST_ASSERT_NOT_NULL(strstr(buf, "\"type\": \"scipp.Dataset\""));
+    TEST_ASSERT_NOT_NULL(strstr(buf, "\"coords\""));
+    TEST_ASSERT_NOT_NULL(strstr(buf, "\"data\""));
+    /* Coordinates */
+    TEST_ASSERT_NOT_NULL(strstr(buf, "\"time\""));
+    TEST_ASSERT_NOT_NULL(strstr(buf, "\"distance\""));
+    TEST_ASSERT_NOT_NULL(strstr(buf, "\"recorder\""));
+    /* null unit for string coord */
+    TEST_ASSERT_NOT_NULL(strstr(buf, "\"unit\": null"));
+    /* Data variables */
     TEST_ASSERT_NOT_NULL(strstr(buf, "\"tp\""));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\"p1\""));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\"p2\""));
     TEST_ASSERT_NOT_NULL(strstr(buf, "\"n\""));
+    /* Bin edges: bins=3 → 4 values; time coord must have the max value */
+    TEST_ASSERT_NOT_NULL(strstr(buf, "1"));
 
     table_manager_data_free(data);
     table_manager_state_free();
