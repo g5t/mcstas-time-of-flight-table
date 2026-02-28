@@ -24,7 +24,6 @@
 *   TableManager must appear AFTER the last TableRecorder.
 *
 * %P
-* manager: string, Name of the TableManager component in the instrument. Default: 0 (assumed to be "manager")
 * distance: double, Distance from the reference point. Default: UNSET (auto-detect from the component's path-length in the instrument file)
 *
 * %E
@@ -33,20 +32,12 @@
 DEFINE COMPONENT TableRecorder
 
 SETTING PARAMETERS (
-  string manager=0,
   distance=UNSET
 )
 
 SHARE
 %{
-#ifndef _TOF_TABLE_SHARED
-#define _TOF_TABLE_SHARED
-
-static int _tof_recorder_count = 0;
-static char ** _tof_recorder_names = 0;
-static double * _tof_recorder_distances = 0;
-
-#endif /* _TOF_TABLE_SHARED */
+%include "tof-table-lib"
 %}
 
 DECLARE
@@ -54,95 +45,36 @@ DECLARE
   /* 0-based index of this recorder into the per-particle tof_t array.
    * Set at INITIALIZE time by consuming one slot from the shared counter. */
   int recorder_index;
-
-  char* manager_name;
-  int manager_index;
-  char * t_name;
-  char * p_name;
-  char * n_name;
-  double dist;
 %}
 
 INITIALIZE
 %{
-  /* Each TableRecorder instance takes the next available index.
-   * INITIALIZE sections run in instrument-file order, so earlier instances
-   * get lower indices, which matches the intended beamline order. */
-  recorder_index = _tof_recorder_count++;
-
-    if (manager && manager[0]) {
-    manager_name = manager;
-  } else {
-    manager_name = "manager";
-  }
-  manager_index = _getcomp_index(manager_name);
-  if (manager_index < 0) {
-    fprintf(stderr,
-      "TableSetup ERROR: Specified manager component '%s' not found. "
-      "Ensure the name is correct and that the component appears after all "
-      "TableRecorder components.\n",
-      manager_name);
-    exit(1);
-  }
-
-  int name_len = strlen("tof_t_") + log10(1+manager_index) + 2;
-
-  t_name = calloc(name_len, sizeof(char));
-  p_name = calloc(name_len, sizeof(char));
-  n_name = calloc(name_len, sizeof(char));
-  sprintf(t_name, "tof_t_%d", manager_index);
-  sprintf(p_name, "tof_p_%d", manager_index);
-  sprintf(n_name, "tof_n_%d", manager_index);
-
-  if (is_set(distance)) {
-    dist = distance;
-  } else {
+  double dist = 0;
+  if (!is_set(distance)) {
     // Assume the particle path is the instrument component order:
-    dist = 0;
     for (int i=0; i < INDEX_CURRENT_COMP-1; ++i) {
       dist += index_getdistance(i, i+1);
     }
   }
-
+  recorder_index = table_manager_state_add_recorder(NAME_CURRENT_COMP, is_set(distance) ? distance : dist);
 %}
 
 TRACE
 %{
-  // Insert our name, if not done in an earlier TRACE
-  if (recorder_index < _tof_recorder_count && _tof_recorder_names && !_tof_recorder_names[recorder_index]) {
-    _tof_recorder_names[recorder_index] = strdup(NAME_CURRENT_COMP);
-  }
-  // And our distance
-  if (recorder_index < _tof_recorder_count && _tof_recorder_distances && _tof_recorder_distances[recorder_index] == 0) {
-    _tof_recorder_distances[recorder_index] = dist;
-  }
-
   /* Propagate the neutron to this component's z=0 plane before recording.
    * This updates t to the actual arrival time at the recorder position,
    * matching the behaviour of standard McStas TOF monitors.
    * PROP_Z0 will ABSORB the particle if vz == 0 (particle never arrives). */
   PROP_Z0;
 
-
-  // Get the per-particle USERVARS that TableManager inserted into the neutron ray struct.
-  double * tof_t = *(double **) particle_getvar_void(_particle, t_name, 0x0);
-  double * tof_p = *(double **) particle_getvar_void(_particle, p_name, 0x0);
-  int tof_n = *(int *) particle_getvar_void(_particle, n_name, 0x0);
-
-  if (tof_t && tof_p && tof_n && recorder_index < tof_n) {
-    tof_t[recorder_index] += t;
-    tof_p[recorder_index] = p;
-    SCATTER;
-  } else {
-    /* This can happen if TableManager didn't run earlier in the trace order to allocate the arrays, 
-       or if recorder_index exceeds the allocated size (i.e. more TableRecorders than expected). 
-    */
+  if (table_manager_particle_record(_particle, recorder_index) != 0) {
     fprintf(stderr,
-      "TableRecorder WARNING: Failed to record TOF for recorder index %d. "
-      "Ensure that TableManager appears after all TableRecorder components and that the manager component name is correct.\n",
+      "TableRecorder ERROR: Failed to record TOF for recorder index %d. Ensure that TableManager appears after all TableRecorder components and that the manager component name is correct.\n",
       recorder_index
-      );
+    );
     ABSORB;
+  } else {
+    SCATTER;
   }
 
 %}

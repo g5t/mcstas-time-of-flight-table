@@ -21,7 +21,6 @@
 *   TableManager must appear AFTER the last TableRecorder.
 *
 * %P
-* manager: string, Name of the TableManager component in the instrument. Default: 0 (guessed by searching for the first TableManager instance)
 * is_t_zero: int, If 1, the time-of-flight recorded in the table will be the time since it passed through this TableSetup, rather than the time since the neutron was created (t=0). Default: 0
 * offset_t_zero: double, If set, the time-of-flight recorded in the table will be offset by this fixed value. Default: UNSET (no offset)
 *
@@ -31,123 +30,32 @@
 DEFINE COMPONENT TableSetup
 
 SETTING PARAMETERS (
-  string manager=0,
   int is_t_zero=0,
   double offset_t_zero=UNSET
 )
 
 SHARE
 %{
-#ifndef _TOF_TABLE_SHARED
-#define _TOF_TABLE_SHARED
-
-static int _tof_recorder_count = 0;
-static char ** _tof_recorder_names = 0;
-static double * _tof_recorder_distances = 0;
-
-#endif /* _TOF_TABLE_SHARED */
+%include "tof-table-lib"
 %}
 
 DECLARE
 %{
-  /* Number of TableRecorder components in the instrument.
-   * Set on the first TRACE call (after all INITIALIZE sections have run). */
-  int n_recorders;
-  char* manager_name;
-  int manager_index;
-  char * t_name;
-  char * p_name;
-  char * n_name;
 %}
 
 INITIALIZE
 %{
-  /* At this point TableRecorder components may not yet have initialised and
-   * incremented _tof_recorder_count (INITIALIZE order = instrument file order).
-   * The count is therefore read on the first TRACE call once all INITIALIZE
-   * sections have completed. */
-
-  n_recorders = 0;
-  
-  if (manager && manager[0]) {
-    manager_name = manager;
-  } else {
-    manager_name = "manager";
-  }
-  manager_index = _getcomp_index(manager_name);
-  if (manager_index < 0) {
-    fprintf(stderr,
-      "TableSetup ERROR: Specified manager component '%s' not found. "
-      "Ensure the name is correct and that the component appears after all "
-      "TableRecorder components.\n",
-      manager_name);
-    exit(1);
-  }
-
-  int name_len = strlen("tof_t_") + log10(1+manager_index) + 2;
-
-  t_name = calloc(name_len, sizeof(char));
-  p_name = calloc(name_len, sizeof(char));
-  n_name = calloc(name_len, sizeof(char));
-  sprintf(t_name, "tof_t_%d", manager_index);
-  sprintf(p_name, "tof_p_%d", manager_index);
-  sprintf(n_name, "tof_n_%d", manager_index);
-
+  table_manager_state_alloc();
   offset_t_zero = is_set(offset_t_zero) ? offset_t_zero : 0;
 %}
 
 TRACE
 %{
-  /* Lazily read the recorder count on the first call. By TRACE time all
-   * INITIALIZE sections have completed, so _tof_recorder_count is final. */
-  if (!n_recorders){
-    n_recorders = _tof_recorder_count;
-    // Setup storage for the recorder names in the order they were inserted.
-    _tof_recorder_names = calloc(n_recorders, sizeof(char*));
-    for (int i = 0; i < n_recorders; i++) {
-      _tof_recorder_names[i] = NULL;
-    }
-    // And their distances
-    _tof_recorder_distances = calloc(n_recorders, sizeof(double));
-  }
-
-  // Get pointers to the per-particle USERVARS that TableManager inserted into the neutron ray struct.
-  double ** tof_t = (double **) particle_getvar_void(_particle, t_name, 0x0);
-  double ** tof_p = (double **) particle_getvar_void(_particle, p_name, 0x0);
-  int * tof_n = (int *) particle_getvar_void(_particle, n_name, 0x0);
-
-  /* Always initialise the per-particle pointer to NULL so that TableManager
-   * can safely distinguish an uninitialised particle (tof_t_uservar is
-   * garbage because particle_uservar_init does not zero pointer fields)
-   * from one that legitimately went through TableSetup with no recorders. */
-  *tof_t = NULL;
-  *tof_p = NULL;
-  *tof_n = 0;
-
-  // Only in the case where recorders are present do we need to allocate the per-particle arrays.
-  if (n_recorders > 0) {
-    /* Allocate and zero-initialise the per-particle time array. */
-    *tof_t = (double*)calloc(n_recorders, sizeof(double));
-    *tof_p = (double*)calloc(n_recorders, sizeof(double));
-
-    if (!*tof_t || !*tof_p) {
-      fprintf(stderr, "TableSetup ERROR: calloc failed for %d doubles.\n", n_recorders);
-      free(*tof_t);
-      free(*tof_p);
-      exit(1);
-    }
-    *tof_n = n_recorders;
-
-    // The zero-point for the time-of-flight recorded in the table:
-    double initial_time = (is_t_zero ? t : 0. ) + offset_t_zero;
-    // Each table-recorder adds to tof_t, so we need the negative of t0 to end-up-with time-of-flight since t0.
-    for (int i = 0; i < n_recorders; i++) {
-      (*tof_t)[i] = initial_time == 0 ? 0 : -initial_time;
-    }
-  }
-
-  
-
+  // The zero-point for the time-of-flight recorded in the table:
+  double initial_time = (is_t_zero ? t : 0. ) + offset_t_zero;
+  // Setup the in-particle arrays for the time-of-flight and probability recorded by each TableRecorder, and the count of recorders.
+  // Each table-recorder adds to tof_t, so we need the negative of t0 to end-up-with time-of-flight since t0.
+  table_manager_particle_alloc(_particle, initial_time == 0 ? 0 : -initial_time);
 %}
 
 END
