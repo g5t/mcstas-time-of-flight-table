@@ -52,147 +52,11 @@ SETTING PARAMETERS (
 
 SHARE
 %{
-#ifndef _TOF_TABLE_SHARED
-#define _TOF_TABLE_SHARED
-
-/* Running count of TableRecorder instances, incremented by each one in INITIALIZE. */
-static int _tof_recorder_count = 0;
-/* Names of the TableRecorder instances, stored in order of their INITIALIZE calls. */
-static char ** _tof_recorder_names = 0;
-/* Distances of the TableRecorder instances, stored in order of their INITIALIZE calls. */
-static double * _tof_recorder_distances = 0;
-
-#endif /* _TOF_TABLE_SHARED */
-
-int table_manager_json_indent(FILE * f, int level){
-  for (int i=0; i < level; ++i) {
-    if (fprintf(f, "  ") < 0) {
-      return -1;
-    }
-  }
-  return 0;
-}
-
-int table_manager_json_array_double(FILE * f, double * x, int n){
-  if (fprintf(f, "[") < 0) {
-    return -1;
-  }
-  for (int i=0; i < n; ++i) {
-    if (fprintf(f, "%.15g", x[i]) < 0) {
-      return -1;
-    }
-    if (i < n - 1) {
-      if (fprintf(f, ", ") < 0) {
-        return -1;
-      }
-    }
-  }
-  if (fprintf(f, "]") < 0) {
-    return -1;
-  }
-  return 0;
-}
-
-int table_manager_json_array_int(FILE * f, int * x, int n){
-  if (fprintf(f, "[") < 0) {
-    return -1;
-  }
-  for (int i=0; i < n; ++i) {
-    if (fprintf(f, "%d", x[i]) < 0) {
-      return -1;
-    }
-    if (i < n - 1) {
-      if (fprintf(f, ", ") < 0) {
-        return -1;
-      }
-    }
-  }
-  if (fprintf(f, "]") < 0) {
-    return -1;
-  }
-  return 0;
-}
-
-int table_manager_json_array_string(FILE * f, char ** x, int n){
-  if (fprintf(f, "[") < 0) {
-    return -1;
-  }
-  for (int i=0; i < n; ++i) {
-    if (fprintf(f, "\"%s\"", x[i]) < 0) {
-      return -1;
-    }
-    if (i < n - 1) {
-      if (fprintf(f, ", ") < 0) {
-        return -1;
-      }
-    }
-  }
-  if (fprintf(f, "]") < 0) {
-    return -1;
-  }
-  return 0;
-}
-
-int table_manager_json_matrix_double(FILE * f, double * x, int m, int n, int indent_level){
-  if (fprintf(f, "[\n") < 0) {
-    return -1;
-  }
-  for (int i=0; i < m; ++i) {
-    if (table_manager_json_indent(f, indent_level + 1) < 0) {
-      return -1;
-    }
-    if (table_manager_json_array_double(f, &x[i*n], n) < 0) {
-      return -1;
-    }
-    if (i < m - 1) {
-      if (fprintf(f, ",\n") < 0) {
-        return -1;
-      }
-    } else {
-      if (fprintf(f, "\n") < 0) {
-        return -1;
-      }
-    }
-  }
-  if (table_manager_json_indent(f, indent_level) < 0) {
-    return -1;
-  }
-  if (fprintf(f, "]") < 0) {
-    return -1;
-  }
-  return 0;
-}
-
-int table_manager_json_matrix_int(FILE * f, int * x, int m, int n, int indent_level){
-  if (fprintf(f, "[\n") < 0) {
-    return -1;
-  }
-  for (int i=0; i < m; ++i) {
-    if (table_manager_json_indent(f, indent_level + 1) < 0) {
-      return -1;
-    }
-    if (table_manager_json_array_int(f, &x[i*n], n) < 0) {
-      return -1;
-    }
-    if (i < m - 1) {
-      if (fprintf(f, ",\n") < 0) {
-        return -1;
-      }
-    } else {
-      if (fprintf(f, "\n") < 0) {
-        return -1;
-      }
-    }
-  }
-  if (table_manager_json_indent(f, indent_level) < 0) {
-    return -1;
-  }
-  if (fprintf(f, "]") < 0) {
-    return -1;
-  }
-  return 0;
-}
-
+#ifdef TOF_TABLE_MANAGER
+#error "Multiple TableManager components in the instrument are not supported."
+#endif
+#define TOF_TABLE_MANAGER
+%include "tof-table-lib"
 %}
 
 USERVARS
@@ -200,25 +64,15 @@ USERVARS
   /* Per-particle dynamic arrays of recorded times, probabilities, distances, and their allocated size.
    * These fields are inserted into every neutron ray's state struct.
    * NOTE: the generated C code appends an instance-index suffix, e.g. tof_t_5. */
-  double * tof_t;
-  double * tof_p;
-  int tof_n;
+  double * table_manager_t;
+  double * table_manager_p;
+  int table_manager_n;
 %}
 
 DECLARE
 %{
-  double * table_tp;
-  double * table_p;
-  double * table_p2;
-  int * table_n;
-
-  int n_bins;
-  int n_recorders;
+  struct TableManagerData * table;
   char * real_filename;
-
-  char * t_name;
-  char * p_name;
-  char * n_name;
 %}
 
 INITIALIZE
@@ -231,168 +85,49 @@ INITIALIZE
     fprintf(stderr, "TableManager ERROR: t_max must be greater than t_min when t_bins is positive.\n");
     exit(1);
   }
-  n_bins = t_bins ? t_bins : 1;
-
-  int name_len = strlen("tof_t_") + log10(1+INDEX_CURRENT_COMP) + 2;
-  t_name = calloc(name_len, sizeof(char));
-  p_name = calloc(name_len, sizeof(char));
-  n_name = calloc(name_len, sizeof(char));
-  sprintf(t_name, "tof_t_%ld", INDEX_CURRENT_COMP);
-  sprintf(p_name, "tof_p_%ld", INDEX_CURRENT_COMP);
-  sprintf(n_name, "tof_n_%ld", INDEX_CURRENT_COMP);
+  // Insert the actual names of the USERVARS, these must match those in the USERVARS section above:
+  table_manager_state_finalize(INDEX_CURRENT_COMP, "table_manager_t", "table_manager_p", "table_manager_n");
 
 
   if (filename && strcmp(filename, "")) {
     real_filename = filename;
   } else {
-    real_filename = (char *)calloc(strlen(NAME_CURRENT_COMP) + 14, sizeof(char)); /* "_tof_table.dat" + null terminator */
+    real_filename = (char *)calloc(strlen(NAME_CURRENT_COMP) + 20, sizeof(char));
     sprintf(real_filename, "%s_tof_table.dat", NAME_CURRENT_COMP);
   }
 
-
-  n_recorders = _tof_recorder_count;
-
-  if (n_recorders <= 0) {
-    fprintf(stderr,
-      "TableManager WARNING: No TableRecorder components found "
-      "(or none were initialised before TableManager).\n");
-    table_p = NULL;
-    table_p2 = NULL;
-    table_n = NULL;
-    table_tp = NULL;
-  } else {
-    /* Allocate: n_recorders by n_bins (weights) */
-    table_p = (double*)calloc((long)n_bins * n_recorders, sizeof(double));
-    table_p2 = (double*)calloc((long)n_bins * n_recorders, sizeof(double));
-    table_n = (int*)calloc((long)n_bins * n_recorders, sizeof(int));
-    // table_d = (double*)calloc((long)n_recorders, sizeof(double));
-    table_tp = (double*)calloc((long)n_bins * n_recorders, sizeof(double));
-    if (!table_p || !table_p2 || !table_n ||  !table_tp) {
-      fprintf(stderr, "TableManager ERROR: Failed to allocate output table.\n");
-      free(table_p);
-      free(table_p2);
-      free(table_n);
-      free(table_tp);
-      exit(1);
-    }
+  if (!_tof_table_manager_state){
+    fprintf(stderr, "TableManager ERROR: state must be pre-allocated by TableSetup.\n");
+    exit(1);
   }
+  table = table_manager_data_alloc(_tof_table_manager_state->n_recorders, t_bins ? t_bins : 1, t_min, t_max);
+  if (!table) {
+    fprintf(stderr, "TableManager ERROR: Failed to allocate component data.\n");
+    exit(1);
+  }
+
 %}
 
 TRACE
 %{
-  double ** tof_t = (double **) particle_getvar_void(_particle, t_name, 0x0);
-  double ** tof_p = (double **) particle_getvar_void(_particle, p_name, 0x0);
-  int * tof_n = (int *) particle_getvar_void(_particle, n_name, 0x0);
-  if (tof_t && tof_p && tof_n && *tof_n > 0) {
-    #pragma omp critical
-    {
-      for (int i=0; i < *tof_n; ++i){
-        if ((*tof_t)[i] >= t_min && (*tof_t)[i] < t_max) {
-          int bin = (int)(((*tof_t)[i] - t_min) / (t_max - t_min) * n_bins);
-          if (bin >= 0 && bin < n_bins) {
-            int index = bin + i * n_bins;
-            table_p[index] += (*tof_p)[i];
-            table_p2[index] += (*tof_p)[i] * (*tof_p)[i];
-            table_tp[index] += (*tof_t)[i] * (*tof_p)[i];
-            table_n[index] += 1;
-          }
-        }
-      }
-    }
-    /* Deallocate per-particle array and reset counter.
-     * Use tof_n > 0 as the guard: tof_n is zero-initialised
-     * by particle_uservar_init so a non-zero value guarantees TableSetup ran
-     * and that tof_t is either NULL (calloc failed → already ABSORBed) or a
-     * valid pointer. */
-    if (*tof_n > 0) {
-      if (tof_t) {
-        free(*tof_t);
-        *tof_t = NULL;
-      }
-      if (tof_p) {
-        free(*tof_p);
-        *tof_p = NULL;
-      }
-    *tof_n = 0;
-    }
-  }
+  table_manager_particle_to_table(_particle, table);
+  table_manager_particle_free(_particle);
 %}
 
 SAVE
 %{
-  if (table_p && table_p2 && table_n && table_tp && write_file) {
-    FILE* _f = fopen(real_filename, "w");
-    if (_f) {
-      int write_error = 0;
-      if (fprintf(_f, "{\n") < 0) write_error = 1;
-      if (!write_error && fprintf(_f, "  \"note\": \"Time-of-flight table generated by component '%s'\",\n", NAME_CURRENT_COMP) < 0) write_error = 1;
-      if (!write_error && fprintf(_f, "  \"recorders\": ") < 0) write_error = 1;
-      if (!write_error && table_manager_json_array_string(_f, _tof_recorder_names, n_recorders) < 0) write_error = 1;
-      if (!write_error && fprintf(_f, ",\n") < 0) write_error = 1;
-      if (!write_error && fprintf(_f, "  \"distances\": ") < 0) write_error = 1;
-      if (!write_error && table_manager_json_array_double(_f, _tof_recorder_distances, n_recorders) < 0) write_error = 1;
-      if (!write_error && fprintf(_f, ",\n") < 0) write_error = 1;
-
-      if (!write_error && fprintf(_f, "  \"t\": { \"min\": %.15g, \"max\": %.15g, \"bins\": %d },\n", t_min, t_max, n_bins) < 0) write_error = 1;
-      if (!write_error && fprintf(_f, "  \"tp\": ") < 0) write_error = 1;
-      if (!write_error && table_manager_json_matrix_double(_f, table_tp, n_recorders, n_bins, 1) < 0) write_error = 1;
-      if (!write_error && fprintf(_f, ",\n") < 0) write_error = 1;
-
-      if (!write_error && fprintf(_f, "  \"p\": ") < 0) write_error = 1;
-      if (!write_error && table_manager_json_matrix_double(_f, table_p, n_recorders, n_bins, 1) < 0) write_error = 1;
-      if (!write_error && fprintf(_f, ",\n") < 0) write_error = 1;
-
-      if (!write_error && fprintf(_f, "  \"p2\": ") < 0) write_error = 1;
-      if (!write_error && table_manager_json_matrix_double(_f, table_p2, n_recorders, n_bins, 1) < 0) write_error = 1;
-      if (!write_error && fprintf(_f, ",\n") < 0) write_error = 1;
-
-      if (!write_error && fprintf(_f, "  \"n\": ") < 0) write_error = 1;
-      if (!write_error && table_manager_json_matrix_int(_f, table_n, n_recorders, n_bins, 1) < 0) write_error = 1;
-      if (!write_error && fprintf(_f, "\n}\n") < 0) write_error = 1;
-
-      if (write_error) {
-        fprintf(stderr, "TableManager WARNING: Failed while writing JSON to '%s'.\n", real_filename);
-      }
-
-      fclose(_f);
-    } else {
-      fprintf(stderr, "TableManager WARNING: Could not open '%s' for writing.\n", filename);
-    }
+  if (write_file){
+    table_manager_write_output_file(real_filename, table);
   }
 %}
 
 FINALLY
 %{
-  if (table_p) {
-    free(table_p);
-    table_p = NULL;
-  }
-  if (table_p2) {
-    free(table_p2);
-    table_p2 = NULL;
-  }
-  if (table_n) {
-    free(table_n);
-    table_n = NULL;
-  }
-  if (table_tp) {
-    free(table_tp);
-    table_tp = NULL;
-  }
+  table_manager_data_free(table);
+  table_manager_state_free();
   if (real_filename && real_filename != filename) {
     free(real_filename);
     real_filename = NULL;
-  }
-  if (_tof_recorder_names) {
-    for (int i = 0; i < n_recorders; i++) {
-      free(_tof_recorder_names[i]);
-    }
-    free(_tof_recorder_names);
-    _tof_recorder_names = NULL;
-  }
-  if (_tof_recorder_distances) {
-    free(_tof_recorder_distances);
-    _tof_recorder_distances = NULL;
   }
 %}
 
