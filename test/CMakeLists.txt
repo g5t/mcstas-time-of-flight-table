@@ -1,0 +1,21 @@
+set(LIB_SRC   ${CMAKE_SOURCE_DIR}/tof-table-lib.c)
+set(STUB_SRC  ${CMAKE_CURRENT_SOURCE_DIR}/particle_stub.c)
+set(INC_DIRS  ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Link math library on platforms that keep it separate (Linux)
+find_library(M_LIB m)
+if(NOT M_LIB)
+    set(M_LIB "")
+endif()
+
+function(add_unity_test name)
+    add_executable(${name} ${name}.c ${LIB_SRC} ${STUB_SRC})
+    target_include_directories(${name} PRIVATE ${INC_DIRS})
+    target_link_libraries(${name} PRIVATE unity ${M_LIB})
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
+
+add_unity_test(test_state)
+add_unity_test(test_data)
+add_unity_test(test_json)
+add_unity_test(test_particle)
